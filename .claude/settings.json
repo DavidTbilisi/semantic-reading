@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Write|Edit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo \"[contract-first] Have you written a failing test for this change? If not, write the test before the implementation.\""
+          }
+        ]
+      }
+    ]
+  }
+}

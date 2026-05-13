@@ -1,0 +1,557 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Semantic Reading — Tests</title>
+<style>
+  :root {
+    --pass:  #2c6b35;
+    --fail:  #8a1a1a;
+    --bg:    #f7f2e6;
+    --bg2:   #efe8d5;
+    --ink:   #1c1714;
+    --mute:  #7e7164;
+    --rule:  #d6caaf;
+    --mono:  'JetBrains Mono', ui-monospace, Consolas, monospace;
+    --serif: Georgia, serif;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: var(--serif); background: var(--bg); color: var(--ink); padding: 40px 32px 80px; font-size: 14px; line-height: 1.6; }
+  h1 { font-size: 1.4rem; font-weight: 600; margin-bottom: 6px; }
+  .summary { font-size: 0.88rem; color: var(--mute); margin-bottom: 32px; font-style: italic; }
+  .summary .pass-count { color: var(--pass); font-weight: 600; }
+  .summary .fail-count { color: var(--fail); font-weight: 600; }
+  .suite { margin-bottom: 28px; }
+  .suite-name {
+    font-family: var(--mono); font-size: 0.78rem; font-weight: 600;
+    letter-spacing: 0.06em; color: var(--mute);
+    padding-bottom: 6px; border-bottom: 1px solid var(--rule);
+    margin-bottom: 8px; text-transform: uppercase;
+  }
+  .test { display: flex; align-items: baseline; gap: 12px; padding: 4px 0; border-bottom: 1px dotted var(--rule); font-size: 0.9rem; }
+  .badge { font-family: var(--mono); font-size: 0.68rem; font-weight: 700; padding: 1px 7px; border-radius: 2px; flex: 0 0 auto; letter-spacing: 0.04em; }
+  .badge.pass { background: #d6edda; color: var(--pass); }
+  .badge.fail { background: #f5d5d5; color: var(--fail); }
+  .test-name { flex: 1; }
+  .error { font-family: var(--mono); font-size: 0.72rem; color: var(--fail); margin-top: 2px; padding-left: 60px; white-space: pre-wrap; word-break: break-all; }
+  /* Hidden stubs that DOM-dependent functions need */
+  #test-stubs { display: none; }
+</style>
+</head>
+<body>
+
+<!-- DOM stubs required by syncFromInputIfNeeded and storage tests -->
+<div id="test-stubs">
+  <textarea id="input-text"></textarea>
+</div>
+
+<h1>Test Suite</h1>
+<div class="summary" id="summary">Running…</div>
+<div id="results"></div>
+
+<!-- Load application modules in dependency order (same as index.html) -->
+<script src="js/constants.js"></script>
+<script src="js/utils.js"></script>
+<script src="js/state.js"></script>
+<script src="js/storage.js"></script>
+<script src="js/segments.js"></script>
+<script src="js/export.js"></script>
+
+<script>
+'use strict';
+
+// ─── Tiny test framework ───────────────────────────────────────────────────
+
+var suites  = [];
+var current = null;
+
+function describe(name, fn) {
+  current = { name: name, tests: [] };
+  suites.push(current);
+  fn();
+}
+
+function it(name, fn) {
+  try {
+    fn();
+    current.tests.push({ name: name, pass: true });
+  } catch (e) {
+    current.tests.push({ name: name, pass: false, error: e.message });
+  }
+}
+
+function assert(condition, msg) {
+  if (!condition) throw new Error(msg || 'Assertion failed');
+}
+
+function assertEqual(a, b, msg) {
+  var sa = JSON.stringify(a), sb = JSON.stringify(b);
+  if (sa !== sb) throw new Error((msg || 'Not equal') + '\n  got:      ' + sa + '\n  expected: ' + sb);
+}
+
+function assertContains(str, sub) {
+  if (typeof str !== 'string' || str.indexOf(sub) === -1)
+    throw new Error('Expected string to contain: ' + JSON.stringify(sub) + '\n  in: ' + JSON.stringify(str));
+}
+
+function assertThrows(fn) {
+  var threw = false;
+  try { fn(); } catch (_) { threw = true; }
+  if (!threw) throw new Error('Expected function to throw');
+}
+
+// ─── Helpers ──────────────────────────────────────────────────────────────
+
+// Reset state and localStorage to a known baseline before each group.
+function freshState() {
+  state.id         = null;
+  state.title      = '';
+  state.mode       = 3;
+  state.paragraphs = [];
+  state.rawText    = '';
+}
+
+var LS_TEST_KEY    = 'sr_marker_sessions';
+var LS_TEST_PREFIX = 'sr_marker_session_';
+
+function clearStorage() {
+  try {
+    var list = JSON.parse(localStorage.getItem(LS_TEST_KEY) || '[]');
+    list.forEach(function(s) { localStorage.removeItem(LS_TEST_PREFIX + s.id); });
+    localStorage.removeItem(LS_TEST_KEY);
+  } catch (_) {}
+}
+
+// ─── utils.js ─────────────────────────────────────────────────────────────
+
+describe('cssTag', function() {
+  it('leaves alphanumeric unchanged',      function() { assertEqual(cssTag('Def'), 'Def'); });
+  it('strips non-alphanumeric characters', function() { assertEqual(cssTag('Assump'), 'Assump'); });
+  it('strips hyphens and spaces',          function() { assertEqual(cssTag('a-b c'), 'abc'); });
+  it('handles empty string',               function() { assertEqual(cssTag(''), ''); });
+});
+
+describe('escapeHtml', function() {
+  it('escapes &',                  function() { assertEqual(escapeHtml('a & b'),      'a &amp; b'); });
+  it('escapes <',                  function() { assertEqual(escapeHtml('<tag>'),       '&lt;tag&gt;'); });
+  it('escapes "',                  function() { assertEqual(escapeHtml('"hi"'),        '&quot;hi&quot;'); });
+  it("escapes '",                  function() { assertEqual(escapeHtml("it's"),       'it&#39;s'); });
+  it('leaves plain text unchanged', function() { assertEqual(escapeHtml('hello'),      'hello'); });
+});
+
+describe('truncate', function() {
+  it('returns short strings unchanged',  function() { assertEqual(truncate('hi', 10), 'hi'); });
+  it('truncates at limit with ellipsis', function() { assertEqual(truncate('abcdefghij', 5), 'abcd…'); });
+  it('collapses internal whitespace',    function() { assertEqual(truncate('a  b   c', 20), 'a b c'); });
+});
+
+describe('safeName', function() {
+  it('lowercases and replaces spaces',    function() { assertEqual(safeName('My Session'), 'my-session'); });
+  it('strips special characters',         function() { assertEqual(safeName('Hello!'),     'hello'); });
+  it('returns "session" for empty input', function() { assertEqual(safeName(''),            'session'); });
+  it('returns "session" for null',        function() { assertEqual(safeName(null),          'session'); });
+  it('collapses multiple separators',     function() { assertEqual(safeName('a--b  c'),    'a-b-c'); });
+});
+
+describe('tagForKey', function() {
+  it('maps d → Def',          function() { assertEqual(tagForKey('d'), 'Def'); });
+  it('maps D → Def (case)',   function() { assertEqual(tagForKey('D'), 'Def'); });
+  it('maps r → R',            function() { assertEqual(tagForKey('r'), 'R'); });
+  it('maps s → Assump',       function() { assertEqual(tagForKey('s'), 'Assump'); });
+  it('maps w → D (Date)',     function() { assertEqual(tagForKey('w'), 'D'); });
+  it('returns null for unknown key', function() { assertEqual(tagForKey('z'), null); });
+});
+
+// ─── segments.js ──────────────────────────────────────────────────────────
+
+describe('mergeAdjacent', function() {
+  it('merges two adjacent untagged segments', function() {
+    var result = mergeAdjacent([{ text: 'hello ' }, { text: 'world' }]);
+    assertEqual(result, [{ text: 'hello world' }]);
+  });
+
+  it('does not merge segments with different tags', function() {
+    var result = mergeAdjacent([{ text: 'a', tag: 'Def' }, { text: 'b', tag: 'R' }]);
+    assertEqual(result.length, 2);
+  });
+
+  it('merges adjacent same-tag segments', function() {
+    var result = mergeAdjacent([{ text: 'foo', tag: 'Def' }, { text: 'bar', tag: 'Def' }]);
+    assertEqual(result, [{ text: 'foobar', tag: 'Def' }]);
+  });
+
+  it('drops empty-text segments', function() {
+    var result = mergeAdjacent([{ text: '' }, { text: 'hi' }]);
+    assertEqual(result, [{ text: 'hi' }]);
+  });
+
+  it('handles a single segment unchanged', function() {
+    var result = mergeAdjacent([{ text: 'solo', tag: 'Q' }]);
+    assertEqual(result, [{ text: 'solo', tag: 'Q' }]);
+  });
+
+  it('returns empty array for all-empty input', function() {
+    var result = mergeAdjacent([{ text: '' }, { text: '' }]);
+    assertEqual(result, []);
+  });
+});
+
+describe('buildSegments', function() {
+  it('returns a single untagged segment when no marks given', function() {
+    var result = buildSegments('hello world', []);
+    assertEqual(result, [{ text: 'hello world' }]);
+  });
+
+  it('splits into before / tagged / after for one mark', function() {
+    var result = buildSegments('hello world', [{ tag: 'Def', text: 'world' }]);
+    assertEqual(result, [{ text: 'hello ' }, { text: 'world', tag: 'Def' }]);
+  });
+
+  it('handles a mark at the start', function() {
+    var result = buildSegments('hello world', [{ tag: 'R', text: 'hello' }]);
+    assertEqual(result, [{ text: 'hello', tag: 'R' }, { text: ' world' }]);
+  });
+
+  it('handles a mark covering the full text', function() {
+    var result = buildSegments('full', [{ tag: 'Q', text: 'full' }]);
+    assertEqual(result, [{ text: 'full', tag: 'Q' }]);
+  });
+
+  it('applies two non-overlapping marks', function() {
+    var result = buildSegments('aXbYc', [{ tag: 'Def', text: 'X' }, { tag: 'R', text: 'Y' }]);
+    var tags   = result.filter(function(s) { return s.tag; }).map(function(s) { return s.tag; });
+    assertEqual(tags, ['Def', 'R']);
+  });
+
+  it('skips a mark whose text is not found', function() {
+    var result = buildSegments('hello', [{ tag: 'Def', text: 'MISSING' }]);
+    assertEqual(result, [{ text: 'hello' }]);
+  });
+});
+
+describe('applyTagRange', function() {
+  it('tags the middle of a segment, producing three parts', function() {
+    freshState();
+    state.paragraphs = [[{ text: 'hello world' }]];
+    applyTagRange(0, 6, 11, 'Def');
+    var segs = state.paragraphs[0];
+    assertEqual(segs.length, 2);
+    assertEqual(segs[0], { text: 'hello ' });
+    assertEqual(segs[1], { text: 'world', tag: 'Def' });
+  });
+
+  it('tags the full segment', function() {
+    freshState();
+    state.paragraphs = [[{ text: 'everything' }]];
+    applyTagRange(0, 0, 10, 'R');
+    assertEqual(state.paragraphs[0], [{ text: 'everything', tag: 'R' }]);
+  });
+
+  it('replaces an existing tag in the targeted range', function() {
+    freshState();
+    state.paragraphs = [[{ text: 'word', tag: 'R' }]];
+    applyTagRange(0, 0, 4, 'Def');
+    assertEqual(state.paragraphs[0], [{ text: 'word', tag: 'Def' }]);
+  });
+
+  it('leaves segments outside the range untouched', function() {
+    freshState();
+    state.paragraphs = [[{ text: 'abc' }, { text: 'def' }]];
+    applyTagRange(0, 3, 6, 'Q');
+    assertEqual(state.paragraphs[0][0], { text: 'abc' });
+    assertEqual(state.paragraphs[0][1], { text: 'def', tag: 'Q' });
+  });
+
+  it('does not affect other paragraphs', function() {
+    freshState();
+    state.paragraphs = [[{ text: 'para one' }], [{ text: 'para two' }]];
+    applyTagRange(0, 0, 4, 'Def');
+    assert(!state.paragraphs[1][0].tag, 'Second paragraph should be unchanged');
+  });
+});
+
+describe('removeTagAt', function() {
+  it('removes a tag from a segment', function() {
+    freshState();
+    state.paragraphs = [[{ text: 'tagged', tag: 'Def' }]];
+    removeTagAt(0, 0);
+    assert(!state.paragraphs[0][0].tag, 'Tag should be removed');
+    assertEqual(state.paragraphs[0][0].text, 'tagged');
+  });
+
+  it('merges with adjacent untagged segment after removal', function() {
+    freshState();
+    state.paragraphs = [[{ text: 'hello ' }, { text: 'world', tag: 'Def' }]];
+    removeTagAt(0, 1);
+    assertEqual(state.paragraphs[0], [{ text: 'hello world' }]);
+  });
+
+  it('does nothing for an out-of-bounds index', function() {
+    freshState();
+    state.paragraphs = [[{ text: 'only' }]];
+    removeTagAt(0, 99);
+    assertEqual(state.paragraphs[0].length, 1);
+  });
+});
+
+// ─── state.js ─────────────────────────────────────────────────────────────
+
+describe('applySessionToState', function() {
+  it('copies all session fields into state', function() {
+    freshState();
+    applySessionToState({ id: 's_abc', title: 'My doc', mode: 4, paragraphs: [[{ text: 'x' }]], rawText: 'x' });
+    assertEqual(state.id,    's_abc');
+    assertEqual(state.title, 'My doc');
+    assertEqual(state.mode,  4);
+    assertEqual(state.paragraphs, [[{ text: 'x' }]]);
+    assertEqual(state.rawText,    'x');
+  });
+
+  it('defaults mode to 3 if session has no mode field', function() {
+    freshState();
+    applySessionToState({ id: 's_x', title: '', paragraphs: [], rawText: '' });
+    assertEqual(state.mode, 3);
+  });
+});
+
+describe('resetState', function() {
+  it('clears all fields to their initial values', function() {
+    state.id         = 's_xyz';
+    state.title      = 'Something';
+    state.mode       = 5;
+    state.paragraphs = [[{ text: 'data' }]];
+    state.rawText    = 'data';
+    resetState();
+    assertEqual(state.id,         null);
+    assertEqual(state.title,      '');
+    assertEqual(state.mode,       3);
+    assertEqual(state.paragraphs, []);
+    assertEqual(state.rawText,    '');
+  });
+});
+
+describe('syncFromInputIfNeeded', function() {
+  it('parses blank-line-separated paragraphs', function() {
+    freshState();
+    document.getElementById('input-text').value = 'first para\n\nsecond para';
+    state.rawText = '';
+    syncFromInputIfNeeded();
+    assertEqual(state.paragraphs.length, 2);
+    assertEqual(state.paragraphs[0][0].text, 'first para');
+    assertEqual(state.paragraphs[1][0].text, 'second para');
+  });
+
+  it('sets paragraphs to [] for empty input', function() {
+    freshState();
+    document.getElementById('input-text').value = '';
+    state.rawText = '';
+    syncFromInputIfNeeded();
+    assertEqual(state.paragraphs, []);
+  });
+
+  it('skips re-parse when rawText matches (preserves tags)', function() {
+    freshState();
+    state.paragraphs = [[{ text: 'same', tag: 'Def' }]];
+    state.rawText    = 'same';
+    document.getElementById('input-text').value = 'same';
+    syncFromInputIfNeeded();
+    assertEqual(state.paragraphs[0][0].tag, 'Def');
+  });
+});
+
+// ─── storage.js ───────────────────────────────────────────────────────────
+
+describe('buildSessionData', function() {
+  it('returns a snapshot matching current state', function() {
+    freshState();
+    state.id         = 's_test1';
+    state.title      = 'Test session';
+    state.mode       = 2;
+    state.paragraphs = [[{ text: 'hi' }]];
+    state.rawText    = 'hi';
+    var data = buildSessionData();
+    assertEqual(data.id,         's_test1');
+    assertEqual(data.title,      'Test session');
+    assertEqual(data.mode,       2);
+    assertEqual(data.paragraphs, [[{ text: 'hi' }]]);
+    assert(typeof data.savedAt === 'string', 'savedAt should be a string');
+  });
+
+  it('assigns a new id if state.id is null', function() {
+    freshState();
+    state.id = null;
+    var data = buildSessionData();
+    assert(data.id && data.id.length > 0, 'id should be assigned');
+    assertEqual(state.id, data.id);
+  });
+});
+
+describe('writeSession / loadSession / deleteSessionData', function() {
+  it('round-trips: write then load returns the same data', function() {
+    clearStorage();
+    freshState();
+    state.id    = 's_rt1';
+    state.title = 'Round-trip';
+    state.mode  = 1;
+    var data = buildSessionData();
+    writeSession(data);
+    var loaded = loadSession('s_rt1');
+    assertEqual(loaded.id,    's_rt1');
+    assertEqual(loaded.title, 'Round-trip');
+    assertEqual(loaded.mode,  1);
+    clearStorage();
+  });
+
+  it('writeSession adds the session to the index list', function() {
+    clearStorage();
+    freshState();
+    state.id    = 's_idx1';
+    state.title = 'Index test';
+    writeSession(buildSessionData());
+    var list = loadSessionsList();
+    assert(list.some(function(s) { return s.id === 's_idx1'; }), 'session should appear in list');
+    clearStorage();
+  });
+
+  it('deleteSessionData removes session from storage and list', function() {
+    clearStorage();
+    freshState();
+    state.id    = 's_del1';
+    state.title = 'Delete me';
+    writeSession(buildSessionData());
+    deleteSessionData('s_del1');
+    assertEqual(loadSession('s_del1'), null);
+    var list = loadSessionsList();
+    assert(!list.some(function(s) { return s.id === 's_del1'; }), 'session should not be in list after delete');
+    clearStorage();
+  });
+
+  it('loadSession returns null for unknown id', function() {
+    assertEqual(loadSession('s_does_not_exist_xyzzy'), null);
+  });
+
+  it('writeSession caps the list at 50 entries', function() {
+    clearStorage();
+    for (var i = 0; i < 52; i++) {
+      freshState();
+      state.id    = 's_cap' + i;
+      state.title = 'Cap ' + i;
+      writeSession(buildSessionData());
+    }
+    var list = loadSessionsList();
+    assert(list.length <= 50, 'list should be capped at 50, got ' + list.length);
+    clearStorage();
+  });
+});
+
+// ─── export.js ────────────────────────────────────────────────────────────
+
+describe('countTags', function() {
+  it('returns empty object for no paragraphs', function() {
+    freshState();
+    assertEqual(countTags(), {});
+  });
+
+  it('counts each tag correctly', function() {
+    freshState();
+    state.paragraphs = [
+      [{ text: 'a', tag: 'Def' }, { text: 'b', tag: 'Def' }, { text: 'c', tag: 'R' }],
+      [{ text: 'd' }, { text: 'e', tag: 'Q' }],
+    ];
+    var c = countTags();
+    assertEqual(c['Def'], 2);
+    assertEqual(c['R'],   1);
+    assertEqual(c['Q'],   1);
+    assert(!c['A'], 'Unused tag should not appear');
+  });
+});
+
+describe('buildMarkdown', function() {
+  it('includes the session title as H1', function() {
+    freshState();
+    state.title      = 'My Article';
+    state.paragraphs = [[{ text: 'intro' }]];
+    assertContains(buildMarkdown(), '# My Article');
+  });
+
+  it('uses "Untitled" when title is empty', function() {
+    freshState();
+    state.paragraphs = [[{ text: 'x' }]];
+    assertContains(buildMarkdown(), '# Untitled');
+  });
+
+  it('formats tagged spans as [Tag: text]', function() {
+    freshState();
+    state.title      = 'T';
+    state.paragraphs = [[{ text: 'hello ' }, { text: 'world', tag: 'Def' }]];
+    assertContains(buildMarkdown(), '[Def: world]');
+  });
+
+  it('includes tag counts when tags exist', function() {
+    freshState();
+    state.paragraphs = [[{ text: 'x', tag: 'R' }]];
+    assertContains(buildMarkdown(), 'R=1');
+  });
+
+  it('includes mode info', function() {
+    freshState();
+    state.mode       = 2;
+    state.paragraphs = [[{ text: 'x' }]];
+    assertContains(buildMarkdown(), 'Mode**: 2');
+  });
+});
+
+describe('buildJson', function() {
+  it('produces valid JSON', function() {
+    freshState();
+    state.title      = 'JSON test';
+    state.paragraphs = [[{ text: 'x' }]];
+    var parsed;
+    try { parsed = JSON.parse(buildJson()); } catch (e) { throw new Error('Invalid JSON: ' + e.message); }
+    assertEqual(parsed.title, 'JSON test');
+  });
+
+  it('includes title, mode, paragraphs, and counts fields', function() {
+    freshState();
+    state.title      = 'Fields';
+    state.mode       = 4;
+    state.paragraphs = [[{ text: 'y', tag: 'Q' }]];
+    var parsed = JSON.parse(buildJson());
+    assert('title'      in parsed, 'missing title');
+    assert('mode'       in parsed, 'missing mode');
+    assert('paragraphs' in parsed, 'missing paragraphs');
+    assert('counts'     in parsed, 'missing counts');
+    assertEqual(parsed.counts['Q'], 1);
+  });
+});
+
+// ─── Render results ───────────────────────────────────────────────────────
+
+var totalPass = 0, totalFail = 0;
+var html = '';
+
+suites.forEach(function(suite) {
+  html += '<div class="suite"><div class="suite-name">' + escapeHtml(suite.name) + '</div>';
+  suite.tests.forEach(function(t) {
+    if (t.pass) { totalPass++; } else { totalFail++; }
+    html += '<div class="test">';
+    html += '<span class="badge ' + (t.pass ? 'pass' : 'fail') + '">' + (t.pass ? 'PASS' : 'FAIL') + '</span>';
+    html += '<span class="test-name">' + escapeHtml(t.name) + '</span>';
+    html += '</div>';
+    if (!t.pass) {
+      html += '<div class="error">' + escapeHtml(t.error || '') + '</div>';
+    }
+  });
+  html += '</div>';
+});
+
+document.getElementById('results').innerHTML = html;
+document.getElementById('summary').innerHTML =
+  '<span class="pass-count">' + totalPass + ' passed</span>' +
+  (totalFail ? ', <span class="fail-count">' + totalFail + ' failed</span>' : '') +
+  ' — ' + (totalPass + totalFail) + ' total';
+document.title = (totalFail ? '✗ ' : '✓ ') + 'Tests — Semantic Reading';
+</script>
+</body>
+</html>

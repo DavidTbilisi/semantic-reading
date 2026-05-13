@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "semantic-reading",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["serve", "-p", "3700", "."],
+      "port": 3700
+    }
+  ]
+}

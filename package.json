@@ -1,0 +1,13 @@
+{
+  "name": "semantic-reading",
+  "private": true,
+  "scripts": {
+    "test": "playwright test",
+    "test:ui": "playwright test --ui",
+    "serve": "npx serve -p 3700 ."
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.60.0",
+    "serve": "^14.2.3"
+  }
+}
