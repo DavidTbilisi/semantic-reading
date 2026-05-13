@@ -45,6 +45,51 @@ async function selectFirstParaAndShowTagbar(page) {
   await page.waitForSelector('#tagbar:not(.hidden)');
 }
 
+// Finds `word` in the reader (skipping .tlabel nodes), selects it, shows the
+// tagbar, then clicks the button for `tag`. Throws if the word is not found.
+// This is the key helper for multi-word marking tests: it locates the word via
+// a TreeWalker so that already-tagged spans don't confuse the offset, and it
+// explicitly avoids selecting inside .tlabel text — which is what guards against
+// the label-length drift bug (Def=3, Assump=6 chars shifting the next mark).
+async function selectWordAndTag(page, word, tag) {
+  const found = await page.evaluate((targetWord) => {
+    const reader = document.getElementById('reader');
+    const walker = document.createTreeWalker(reader, NodeFilter.SHOW_TEXT);
+    let node;
+    while ((node = walker.nextNode())) {
+      if (node.parentElement.closest('.tlabel')) continue; // skip label text
+      const idx = node.textContent.indexOf(targetWord);
+      if (idx !== -1) {
+        const range = document.createRange();
+        range.setStart(node, idx);
+        range.setEnd(node, idx + targetWord.length);
+        window.getSelection().removeAllRanges();
+        window.getSelection().addRange(range);
+        return true;
+      }
+    }
+    return false;
+  }, word);
+  if (!found) throw new Error(`Word not found in reader: "${word}"`);
+  await page.locator('#reader').dispatchEvent('mouseup');
+  await page.waitForSelector('#tagbar:not(.hidden)');
+  await page.locator('.tagbar-btn', { hasText: tag }).first().click();
+}
+
+// Returns [{text, tag}, ...] for every .tspan in the reader.
+// Strips the .tlabel text so `text` matches the raw marked word.
+function tspanSnapshot(page) {
+  return page.evaluate(() =>
+    [...document.querySelectorAll('.tspan')].map(span => {
+      const label = span.querySelector('.tlabel');
+      return {
+        text: span.textContent.replace(label ? label.textContent : '', ''),
+        tag:  label ? label.textContent : '',
+      };
+    })
+  );
+}
+
 // ─── App loads ───────────────────────────────────────────────────────────────
 
 test('page title and top-level chrome are visible', async ({ page }) => {
@@ -219,4 +264,82 @@ test('number key 1 switches to input tab', async ({ page }) => {
   await page.click('[data-tab="mark"]');
   await page.keyboard.press('1');
   await expect(page.locator('#pane-input')).not.toHaveClass(/hidden/);
+});
+
+// ─── Multi-word marking in one paragraph ─────────────────────────────────────
+//
+// These tests guard against label-length offset drift: when a span is tagged,
+// the DOM gains a <sup class="tlabel">Def</sup> (3 chars), <sup>Assump</sup>
+// (6 chars), etc. If textLengthInRange ever stops stripping .tlabel nodes, the
+// next mark in the same paragraph will land at the wrong position, shifted by
+// the label's character count. Each test below verifies the exact word that
+// gets tagged, not just that *a* span exists.
+
+const SINGLE_PARA = 'The mitochondria is the powerhouse of the cell and drives metabolism.';
+
+test('two marks in one paragraph land on the correct words', async ({ page }) => {
+  await pasteTextAndGoMark(page, SINGLE_PARA);
+
+  await selectWordAndTag(page, 'mitochondria', 'Def');
+  await selectWordAndTag(page, 'powerhouse', 'R');
+
+  const spans = await tspanSnapshot(page);
+  expect(spans).toHaveLength(2);
+  expect(spans[0]).toEqual({ text: 'mitochondria', tag: 'Def' });
+  expect(spans[1]).toEqual({ text: 'powerhouse',   tag: 'R'   });
+});
+
+test('three marks in one paragraph all land correctly', async ({ page }) => {
+  await pasteTextAndGoMark(page, SINGLE_PARA);
+
+  await selectWordAndTag(page, 'mitochondria', 'Def');
+  await selectWordAndTag(page, 'powerhouse',   'R');
+  await selectWordAndTag(page, 'metabolism',   'Q');
+
+  const spans = await tspanSnapshot(page);
+  expect(spans).toHaveLength(3);
+  expect(spans[0]).toEqual({ text: 'mitochondria', tag: 'Def' });
+  expect(spans[1]).toEqual({ text: 'powerhouse',   tag: 'R'   });
+  expect(spans[2]).toEqual({ text: 'metabolism',   tag: 'Q'   });
+});
+
+test('marking a word earlier in the paragraph after marking a later one', async ({ page }) => {
+  await pasteTextAndGoMark(page, SINGLE_PARA);
+
+  // Tag in reverse paragraph order to test that offsets aren't relative to
+  // each other — each mark recalculates from the paragraph start.
+  await selectWordAndTag(page, 'powerhouse',   'R');
+  await selectWordAndTag(page, 'mitochondria', 'Def');
+
+  const spans = await tspanSnapshot(page);
+  expect(spans).toHaveLength(2);
+  // DOM order follows paragraph order regardless of tagging order
+  expect(spans[0]).toEqual({ text: 'mitochondria', tag: 'Def' });
+  expect(spans[1]).toEqual({ text: 'powerhouse',   tag: 'R'   });
+});
+
+test('long label (Assump, 6 chars) does not shift the next mark', async ({ page }) => {
+  // Switch to mode 4 which includes Assump
+  await page.click('[data-mode="4"]');
+  await pasteTextAndGoMark(page, SINGLE_PARA);
+
+  await selectWordAndTag(page, 'mitochondria', 'Assump');
+  await selectWordAndTag(page, 'powerhouse',   'R');
+
+  const spans = await tspanSnapshot(page);
+  expect(spans).toHaveLength(2);
+  expect(spans[0]).toEqual({ text: 'mitochondria', tag: 'Assump' });
+  expect(spans[1]).toEqual({ text: 'powerhouse',   tag: 'R'      });
+});
+
+test('re-tagging a word changes its label without duplicating the span', async ({ page }) => {
+  await pasteTextAndGoMark(page, SINGLE_PARA);
+
+  await selectWordAndTag(page, 'mitochondria', 'Def');
+  // Select the same word again (now inside a .tspan) and re-tag as R
+  await selectWordAndTag(page, 'mitochondria', 'R');
+
+  const spans = await tspanSnapshot(page);
+  expect(spans).toHaveLength(1);
+  expect(spans[0]).toEqual({ text: 'mitochondria', tag: 'R' });
 });
