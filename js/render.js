@@ -9,11 +9,18 @@ var SUB_RENDERERS = {
   cards: function() { renderCards(); },
   sheet: function() { renderSheet(); },
   map:   function() { renderMap();   },
+  gaps:  function() { renderGaps();  },
 };
 
 // ===== Reader =====
 
 function renderReader() {
+  // Dismiss any open note popup before rebuilding the DOM.
+  if (typeof activeNote !== 'undefined' && activeNote) {
+    activeNote = null;
+    var _np = $('#note-popup');
+    if (_np) _np.classList.add('hidden');
+  }
   var reader = $('#reader');
   if (!state.paragraphs.length) {
     reader.innerHTML = '<div class="reader-empty">Paste text in <code>Input</code> first, then come back here to mark.</div>';
@@ -27,7 +34,9 @@ function renderReader() {
     var inner = '<span class="pnum">¶' + (pi + 1) + '</span>';
     segs.forEach(function(seg, si) {
       if (seg.tag) {
-        inner += '<span class="tspan tg-' + cssTag(seg.tag) + '" data-p="' + pi + '" data-s="' + si + '" title="' + TAGS[seg.tag].name + ' — click to remove">' + escapeHtml(seg.text) + '<sup class="tlabel">' + seg.tag + '</sup></span>';
+        var noteClass = seg.note ? ' has-note' : '';
+        var noteTitle = seg.note ? ' · note: ' + seg.note.replace(/"/g, '\'').slice(0, 60) : '';
+        inner += '<span class="tspan tg-' + cssTag(seg.tag) + noteClass + '" data-p="' + pi + '" data-s="' + si + '" title="' + TAGS[seg.tag].name + noteTitle + ' — click to annotate">' + escapeHtml(seg.text) + '<sup class="tlabel">' + seg.tag + '</sup></span>';
       } else {
         inner += '<span class="seg" data-p="' + pi + '" data-s="' + si + '">' + escapeHtml(seg.text) + '</span>';
       }
@@ -382,4 +391,52 @@ function renderMap() {
     side.appendChild(div);
   });
   if (side.children.length) wrap.appendChild(side);
+}
+
+// ===== Gaps =====
+
+function renderGaps() {
+  var wrap = $('#sub-gaps');
+  wrap.innerHTML = '';
+
+  var questions = [];
+  var noted     = [];
+  state.paragraphs.forEach(function(segs, pi) {
+    segs.forEach(function(s) {
+      if (!s.tag) return;
+      if (s.tag === 'Q') questions.push({ pi: pi, tag: s.tag, text: s.text, note: s.note || '' });
+      else if (s.note && s.note.trim()) noted.push({ pi: pi, tag: s.tag, text: s.text, note: s.note });
+    });
+  });
+
+  if (!questions.length && !noted.length) {
+    wrap.innerHTML =
+      '<div class="struct-empty">No gaps recorded yet.<br>' +
+      'Mark unclear spans with <code>Q</code>, or click any tagged span to add a note.</div>';
+    return;
+  }
+
+  function itemHtml(it) {
+    return '<div class="gap-item">' +
+      '<span class="gap-ref">¶' + (it.pi + 1) + '</span>' +
+      '<span class="gap-tag tg-' + cssTag(it.tag) + '">' + it.tag + '</span>' +
+      '<span class="gap-text">' + escapeHtml(it.text.trim()) + '</span>' +
+      (it.note ? '<div class="gap-note">' + escapeHtml(it.note.trim()) + '</div>' : '') +
+    '</div>';
+  }
+
+  if (questions.length) {
+    var qDiv = document.createElement('div');
+    qDiv.className = 'gaps-grp';
+    qDiv.innerHTML = '<div class="gaps-grp-h">Open questions (' + questions.length + ')</div>' +
+      questions.map(itemHtml).join('');
+    wrap.appendChild(qDiv);
+  }
+  if (noted.length) {
+    var nDiv = document.createElement('div');
+    nDiv.className = 'gaps-grp';
+    nDiv.innerHTML = '<div class="gaps-grp-h">Reader notes (' + noted.length + ')</div>' +
+      noted.map(itemHtml).join('');
+    wrap.appendChild(nDiv);
+  }
 }

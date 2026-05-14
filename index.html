@@ -74,6 +74,7 @@
         <button class="sub-tab active" data-sub="cards">Cards</button>
         <button class="sub-tab" data-sub="sheet">Apparatus</button>
         <button class="sub-tab" data-sub="map">Atlas</button>
+        <button class="sub-tab" data-sub="gaps">Gaps</button>
         <div style="flex:1"></div>
         <span class="struct-meta" id="struct-meta"></span>
       </div>
@@ -81,6 +82,7 @@
         <div class="sub-view" id="sub-cards"></div>
         <div class="sub-view hidden" id="sub-sheet"></div>
         <div class="sub-view hidden" id="sub-map"></div>
+        <div class="sub-view hidden" id="sub-gaps"></div>
       </div>
     </div>
 
@@ -121,6 +123,18 @@
 </div>
 
 <div class="tagbar hidden" id="tagbar"></div>
+
+<div class="note-popup hidden" id="note-popup">
+  <div class="note-popup-head">
+    <span class="note-popup-tag" id="note-popup-tag"></span>
+    <span class="note-popup-preview" id="note-popup-preview"></span>
+    <button class="note-popup-close" id="note-popup-close" aria-label="Close">×</button>
+  </div>
+  <textarea class="note-popup-ta" id="note-popup-ta" placeholder="Add a note about this span…" rows="3"></textarea>
+  <div class="note-popup-foot">
+    <button class="btn note-popup-remove" id="note-popup-remove">Remove tag</button>
+  </div>
+</div>
 
 <div class="kbd-strip" aria-hidden="true">
   <span><kbd>1</kbd>–<kbd>4</kbd> step</span>

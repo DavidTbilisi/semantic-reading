@@ -54,11 +54,12 @@ function applyTagRange(pi, startChar, endChar, tag) {
   state.paragraphs[pi] = mergeAdjacent(out);
 }
 
-// Removes the tag from segment si in paragraph pi.
+// Removes the tag (and any note) from segment si in paragraph pi.
 function removeTagAt(pi, si) {
   var segs = state.paragraphs[pi];
   if (!segs[si]) return;
   delete segs[si].tag;
+  delete segs[si].note;
   state.paragraphs[pi] = mergeAdjacent(segs);
 }
 
@@ -70,7 +71,7 @@ function mergeAdjacent(segs) {
     var s = segs[i];
     if (!s.text) continue;
     var prev = out[out.length - 1];
-    if (prev && (prev.tag || null) === (s.tag || null)) {
+    if (prev && (prev.tag || null) === (s.tag || null) && (prev.note || '') === (s.note || '')) {
       prev.text += s.text;
     } else {
       out.push(Object.assign({}, s));

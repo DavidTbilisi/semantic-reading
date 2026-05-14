@@ -7,6 +7,9 @@ var THEME_KEY  = 'sr_marker_theme';
 // Replaces the previous bar._paraEl DOM-attribute hack (DI / hidden-state fix).
 var activePara = null;
 
+// Note popup state: which segment is being annotated.
+var activeNote = null; // { pi, si }
+
 // ===== Theme =====
 
 function loadTheme() {
@@ -166,7 +169,67 @@ function bindInputArea() {
   ta.addEventListener('input', function()  { state.rawText = ta.value; });
 }
 
-// ===== Reader (click to remove tags) =====
+// ===== Note popup =====
+
+function openNotePopup(pi, si, anchorEl) {
+  var segs = state.paragraphs[pi];
+  if (!segs || !segs[si] || !segs[si].tag) return;
+  activeNote = { pi: pi, si: si };
+  var seg    = segs[si];
+  var popup  = $('#note-popup');
+  var tagEl  = $('#note-popup-tag');
+  tagEl.textContent = seg.tag;
+  tagEl.className   = 'note-popup-tag tg-' + cssTag(seg.tag);
+  $('#note-popup-preview').textContent = truncate(seg.text, 42);
+  $('#note-popup-ta').value            = seg.note || '';
+  popup.classList.remove('hidden');
+  var rect = anchorEl.getBoundingClientRect();
+  var pw   = popup.offsetWidth || 296;
+  var lx   = Math.min(rect.left + window.scrollX, window.innerWidth - pw - 12);
+  if (lx < 8) lx = 8;
+  popup.style.left = lx + 'px';
+  popup.style.top  = (rect.bottom + window.scrollY + 6) + 'px';
+  $('#note-popup-ta').focus();
+}
+
+function closeNotePopup() {
+  if (!activeNote) return;
+  activeNote = null;
+  $('#note-popup').classList.add('hidden');
+  renderReader();
+  if (currentSub === 'gaps' && !$('#pane-structure').classList.contains('hidden')) {
+    renderGaps();
+  }
+}
+
+function bindNotePopup() {
+  $('#note-popup-ta').addEventListener('input', function(e) {
+    if (!activeNote) return;
+    var seg = state.paragraphs[activeNote.pi] && state.paragraphs[activeNote.pi][activeNote.si];
+    if (seg) seg.note = e.target.value || undefined;
+  });
+
+  $('#note-popup-close').addEventListener('click', function() { closeNotePopup(); });
+
+  $('#note-popup-remove').addEventListener('click', function() {
+    if (!activeNote) return;
+    var pi = activeNote.pi, si = activeNote.si;
+    activeNote = null;
+    $('#note-popup').classList.add('hidden');
+    removeTagAt(pi, si);
+    renderReader();
+    hideTagbar();
+  });
+
+  document.addEventListener('click', function(e) {
+    if (!activeNote) return;
+    if (!$('#note-popup').contains(e.target) && !e.target.closest('.tspan')) {
+      closeNotePopup();
+    }
+  });
+}
+
+// ===== Reader (click to annotate tags) =====
 
 function bindReader() {
   var reader = $('#reader');
@@ -175,8 +238,7 @@ function bindReader() {
   reader.addEventListener('click', function(e) {
     var span = e.target.closest('.tspan');
     if (span && !window.getSelection().toString()) {
-      removeTagAt(Number(span.dataset.p), Number(span.dataset.s));
-      renderReader();
+      openNotePopup(Number(span.dataset.p), Number(span.dataset.s), span);
       hideTagbar();
     }
   });
@@ -342,6 +404,7 @@ function bindKeyboard() {
     }
 
     if (e.key === 'Escape') {
+      if (activeNote) { closeNotePopup(); return; }
       if (sel) sel.removeAllRanges();
       hideTagbar();
       return;
@@ -368,6 +431,7 @@ function init() {
   bindTabs();
   bindInputArea();
   bindReader();
+  bindNotePopup();
   bindKeyboard();
   bindStructure();
   bindExportButtons();
