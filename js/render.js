@@ -46,7 +46,7 @@ function renderLegend() {
   var active = {};
   modeTags().forEach(function(t) { active[t] = true; });
   FAMILIES.forEach(function(fam) {
-    var fkeys = Object.keys(TAGS).filter(function(t) { return TAGS[t].family === fam; });
+    var fkeys = tagOrder(function(t) { return TAGS[t].family === fam; });
     if (!fkeys.length) return;
     var sec = document.createElement('div');
     sec.className = 'fam';
@@ -55,11 +55,15 @@ function renderLegend() {
     fn.textContent = fam;
     sec.appendChild(fn);
     fkeys.forEach(function(t) {
+      var isChild = !!TAGS[t].parent;
       var row = document.createElement('div');
-      row.className = 'lg-row tg-' + cssTag(t) + (active[t] ? '' : ' dim');
+      row.className = 'lg-row tg-' + cssTag(t) + (active[t] ? '' : ' dim') + (isChild ? ' child' : '');
+      var route = TAGS[t].route || '';
+      var routeChip = route ? '<span class="lr" title="routes to ' + (FRAMEWORKS[route] ? FRAMEWORKS[route].name + ' — ' + FRAMEWORKS[route].desc : 'cross-cutting') + '">' + (route === '*' ? '✱' : route) + '</span>' : '';
       row.innerHTML =
         '<span class="lk">' + t + '</span>' +
         '<span class="ld">' + TAGS[t].desc + '</span>' +
+        routeChip +
         '<span class="lc' + (counts[t] ? ' has' : '') + '">' + (counts[t] || 0) + '</span>';
       sec.appendChild(row);
     });
@@ -114,6 +118,47 @@ function renderSessions() {
 function renderExport() {
   $('#export-md').textContent   = buildMarkdown();
   $('#export-json').textContent = buildJson();
+  renderAnkiCsvs();
+}
+
+function renderAnkiCsvs() {
+  var wrap = $('#export-anki');
+  if (!wrap) return;
+  var csvs = buildAnkiCsvs();
+  var keys = Object.keys(csvs);
+  wrap.innerHTML = '';
+  if (!keys.length) {
+    wrap.innerHTML = '<div class="anki-empty">No tagged spans yet — mark some text first.</div>';
+    return;
+  }
+  keys.forEach(function(fw) {
+    var lines  = csvs[fw].split(/\r\n/);
+    var rowN   = lines.length - 1;
+    var fname  = safeName(state.title) + '-' + fw.toLowerCase() + '.csv';
+    var block  = document.createElement('div');
+    block.className = 'anki-block';
+    block.innerHTML =
+      '<div class="anki-head">' +
+        '<span class="anki-fw">' + fw + '</span>' +
+        '<span class="anki-meta">' + rowN + ' card' + (rowN === 1 ? '' : 's') + ' · ' + FRAMEWORKS[fw].desc + '</span>' +
+        '<button class="btn anki-copy" data-fw="' + fw + '">Copy</button>' +
+        '<button class="btn anki-dl" data-fw="' + fw + '" data-name="' + fname + '">Download</button>' +
+      '</div>' +
+      '<pre class="anki-csv">' + escapeHtml(csvs[fw]) + '</pre>';
+    wrap.appendChild(block);
+  });
+  wrap.querySelectorAll('.anki-copy').forEach(function(b) {
+    b.addEventListener('click', function() {
+      var fw = b.dataset.fw;
+      copy(buildAnkiCsvs()[fw], fw + ' CSV copied');
+    });
+  });
+  wrap.querySelectorAll('.anki-dl').forEach(function(b) {
+    b.addEventListener('click', function() {
+      var fw = b.dataset.fw;
+      download(b.dataset.name, buildAnkiCsvs()[fw]);
+    });
+  });
 }
 
 // ===== Structure =====
@@ -199,7 +244,7 @@ function renderSheet() {
     return;
   }
   FAMILIES.forEach(function(fam) {
-    var tagsInFam = Object.keys(TAGS).filter(function(t) { return TAGS[t].family === fam; });
+    var tagsInFam = tagOrder(function(t) { return TAGS[t].family === fam; });
     var famItems  = items.filter(function(it) { return tagsInFam.indexOf(it.tag) !== -1; });
     if (!famItems.length) return;
     var grp = document.createElement('div');
@@ -315,7 +360,7 @@ function renderMap() {
   wrap.appendChild(mapWrap);
 
   // Side bins: non-Def structural/execution tags.
-  var BIN_KEYS = ['R','C','B','L','T','X','Assump','Q','A','M'];
+  var BIN_KEYS = ['R','Ev','C','B','L','T','X','Opp','Assump','Q','A','M','Mn','Ex','An'];
   var bins = {};
   BIN_KEYS.forEach(function(k) { bins[k] = []; });
   state.paragraphs.forEach(function(segs, pi) {

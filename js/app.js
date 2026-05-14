@@ -204,8 +204,8 @@ function showTagbar(x, y) {
   var tags    = modeTags();
   var ordered = [];
   FAMILIES.forEach(function(fam) {
-    Object.keys(TAGS).forEach(function(t) {
-      if (TAGS[t].family === fam && tags.indexOf(t) !== -1) ordered.push(t);
+    tagOrder(function(t) { return TAGS[t].family === fam; }).forEach(function(t) {
+      if (tags.indexOf(t) !== -1) ordered.push(t);
     });
   });
   ordered.forEach(function(t, idx) {
@@ -215,9 +215,11 @@ function showTagbar(x, y) {
       bar.appendChild(sep);
     }
     var btn = document.createElement('button');
-    btn.className  = 'tagbar-btn tg-' + cssTag(t);
+    btn.className  = 'tagbar-btn tg-' + cssTag(t) + (TAGS[t].parent ? ' child' : '');
     btn.textContent = t;
-    btn.title = TAGS[t].name + ' — ' + TAGS[t].desc;
+    var rt = TAGS[t].route;
+    var rtTxt = rt === '*' ? ' · routes everywhere' : (rt && FRAMEWORKS[rt] ? ' · → ' + FRAMEWORKS[rt].name : '');
+    btn.title = TAGS[t].name + ' — ' + TAGS[t].desc + (TAGS[t].parent ? ' (sub-' + TAGS[TAGS[t].parent].name + ')' : '') + rtTxt;
     btn.addEventListener('mousedown', function(e) { e.preventDefault(); });
     btn.addEventListener('click',     function(e) { e.preventDefault(); applyTagToSelection(t); });
     bar.appendChild(btn);
@@ -303,6 +305,13 @@ function bindExportButtons() {
   $('#btn-copy-json').addEventListener('click',    function() { copy($('#export-json').textContent, 'JSON copied'); });
   $('#btn-download-md').addEventListener('click',  function() { download(safeName(state.title) + '.md',   $('#export-md').textContent); });
   $('#btn-download-json').addEventListener('click',function() { download(safeName(state.title) + '.json', $('#export-json').textContent); });
+  $('#btn-download-anki').addEventListener('click', function() {
+    var csvs = buildAnkiCsvs();
+    var keys = Object.keys(csvs);
+    if (!keys.length) { toast('Nothing to export — mark some text first'); return; }
+    keys.forEach(function(fw) { download(safeName(state.title) + '-' + fw.toLowerCase() + '.csv', csvs[fw]); });
+    toast('Downloaded ' + keys.length + ' CSV' + (keys.length === 1 ? '' : 's'));
+  });
 }
 
 // ===== Keyboard =====

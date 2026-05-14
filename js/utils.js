@@ -21,7 +21,7 @@ function safeName(s) {
 }
 
 function tagForKey(key) {
-  var map = { d:'Def', q:'Q', r:'R', m:'M', a:'A', c:'C', b:'B', l:'L', t:'T', x:'X', n:'N', p:'P', w:'D', s:'Assump' };
+  var map = { d:'Def', q:'Q', r:'R', m:'M', a:'A', c:'C', b:'B', l:'L', t:'T', x:'X', n:'N', p:'P', w:'D', s:'Assump', e:'Ev', g:'Ex', i:'Mn', y:'An', o:'Opp' };
   return map[key.toLowerCase()] || null;
 }
 
