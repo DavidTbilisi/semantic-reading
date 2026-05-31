@@ -524,6 +524,190 @@ describe('buildJson', function() {
     assert('counts'     in parsed, 'missing counts');
     assertEqual(parsed.counts['Q'], 1);
   });
+
+  it('includes an "encoding" key bucketed by framework', function() {
+    freshState();
+    state.paragraphs = [[{ text: 'x', tag: 'Def' }, { text: 'y', tag: 'R' }]];
+    var parsed = JSON.parse(buildJson());
+    assert('encoding' in parsed, 'missing encoding');
+    assert(parsed.encoding.NEDF, 'NEDF bucket missing (Def is routed to NEDF)');
+    assert(parsed.encoding.CAST, 'CAST bucket missing (R is routed to CAST)');
+  });
+});
+
+describe('flatExtracts', function() {
+  it('returns a flat list of every tagged span with paragraph index', function() {
+    freshState();
+    state.paragraphs = [
+      [{ text: 'plain ' }, { text: 'idea', tag: 'Def' }],
+      [{ text: 'unclear', tag: 'Q' }],
+    ];
+    var out = flatExtracts();
+    assertEqual(out.length, 2);
+    assertEqual(out[0].tag,       'Def');
+    assertEqual(out[0].text,      'idea');
+    assertEqual(out[0].paragraph, 1);
+    assertEqual(out[1].tag,       'Q');
+    assertEqual(out[1].paragraph, 2);
+  });
+
+  it('respects an optional filter', function() {
+    freshState();
+    state.paragraphs = [[{ text: 'a', tag: 'Def' }, { text: 'b', tag: 'Q' }]];
+    var defs = flatExtracts(function(s) { return s.tag === 'Def'; });
+    assertEqual(defs.length, 1);
+    assertEqual(defs[0].tag, 'Def');
+  });
+
+  it('returns empty list when no tagged spans exist', function() {
+    freshState();
+    state.paragraphs = [[{ text: 'untagged' }]];
+    assertEqual(flatExtracts(), []);
+  });
+
+  it('attaches the tag display name from TAGS table', function() {
+    freshState();
+    state.paragraphs = [[{ text: 'x', tag: 'Def' }]];
+    var out = flatExtracts();
+    assertEqual(out[0].name, 'Definition');
+  });
+});
+
+describe('routeToFrameworks', function() {
+  it('buckets each tag into its declared framework', function() {
+    freshState();
+    state.paragraphs = [[
+      { text: 'idea', tag: 'Def' },  // → NEDF
+      { text: 'rel',  tag: 'R'   },  // → CAST
+      { text: 'lim',  tag: 'C'   },  // → SPEAR
+      { text: 'msr',  tag: 'M'   },  // → ORACLE
+    ]];
+    var out = routeToFrameworks();
+    assertEqual(out.NEDF.items.length,   1);
+    assertEqual(out.CAST.items.length,   1);
+    assertEqual(out.SPEAR.items.length,  1);
+    assertEqual(out.ORACLE.items.length, 1);
+  });
+
+  it('duplicates cross-cutting (Q) tags into every populated framework', function() {
+    freshState();
+    state.paragraphs = [[
+      { text: 'idea',     tag: 'Def' }, // → NEDF
+      { text: 'rel',      tag: 'R'   }, // → CAST
+      { text: 'unclear?', tag: 'Q'   }, // → * (cross-cutting)
+    ]];
+    var out = routeToFrameworks();
+    // Q should appear inside NEDF AND CAST, marked crossCutting
+    var nedfHasQ = out.NEDF.items.some(function(i) { return i.tag === 'Q' && i.crossCutting; });
+    var castHasQ = out.CAST.items.some(function(i) { return i.tag === 'Q' && i.crossCutting; });
+    assert(nedfHasQ, 'Q should be cross-cut into NEDF');
+    assert(castHasQ, 'Q should be cross-cut into CAST');
+  });
+
+  it('omits empty buckets entirely', function() {
+    freshState();
+    state.paragraphs = [[{ text: 'idea', tag: 'Def' }]];
+    var out = routeToFrameworks();
+    assert('NEDF' in out, 'NEDF should be present');
+    assert(!('CAST' in out), 'CAST should be absent when no CAST tag exists');
+  });
+});
+
+describe('csvField', function() {
+  it('leaves a plain string unquoted',         function() { assertEqual(csvField('hello'), 'hello'); });
+  it('wraps commas in quotes',                  function() { assertEqual(csvField('a,b'),   '"a,b"'); });
+  it('wraps newlines in quotes',                function() { assertEqual(csvField('a\nb'),  '"a\nb"'); });
+  it('escapes embedded double quotes',          function() { assertEqual(csvField('a"b'),   '"a""b"'); });
+  it('returns empty string for null/undefined', function() {
+    assertEqual(csvField(null),      '');
+    assertEqual(csvField(undefined), '');
+  });
+});
+
+describe('buildAnkiCsvs', function() {
+  it('returns one key per framework that has any tagged spans', function() {
+    freshState();
+    state.paragraphs = [[
+      { text: 'idea', tag: 'Def' },
+      { text: 'rel',  tag: 'R'   },
+    ]];
+    var out = Object.keys(buildAnkiCsvs()).sort();
+    assertEqual(out, ['CAST', 'NEDF']);
+  });
+
+  it('each CSV begins with the Front,Back,Tags header', function() {
+    freshState();
+    state.paragraphs = [[{ text: 'idea', tag: 'Def' }]];
+    var csv = buildAnkiCsvs().NEDF;
+    assertContains(csv, 'Front,Back,Tags');
+  });
+
+  it('row tags include framework + tag + paragraph token', function() {
+    freshState();
+    state.paragraphs = [[{ text: 'idea', tag: 'Def' }]];
+    var csv = buildAnkiCsvs().NEDF;
+    assertContains(csv, 'NEDF Def p1');
+  });
+
+  it('cross-cutting Q rows include the "cross-cutting" marker', function() {
+    freshState();
+    state.paragraphs = [[
+      { text: 'idea',     tag: 'Def' },
+      { text: 'unclear?', tag: 'Q'   },
+    ]];
+    var csv = buildAnkiCsvs().NEDF;
+    assertContains(csv, 'cross-cutting');
+  });
+
+  it('returns an empty object when no tags exist', function() {
+    freshState();
+    state.paragraphs = [[{ text: 'plain' }]];
+    assertEqual(buildAnkiCsvs(), {});
+  });
+});
+
+// ─── constants.js: tagOrder ─────────────────────────────────────────────────
+
+describe('tagOrder', function() {
+  it('returns a parent before each of its children', function() {
+    var order = tagOrder();
+    var defAt = order.indexOf('Def');
+    ['Mn', 'Ex', 'An'].forEach(function(child) {
+      var i = order.indexOf(child);
+      assert(i > defAt, child + ' (' + i + ') must come after Def (' + defAt + ')');
+    });
+  });
+
+  it('orders R before Ev (parent before child)', function() {
+    var order = tagOrder();
+    assert(order.indexOf('R') < order.indexOf('Ev'), 'R must precede Ev');
+  });
+
+  it('orders X before Opp (parent before child)', function() {
+    var order = tagOrder();
+    assert(order.indexOf('X') < order.indexOf('Opp'), 'X must precede Opp');
+  });
+
+  it('honours the filter argument', function() {
+    var only = tagOrder(function(k) { return TAGS[k].family === 'Anchor'; });
+    only.forEach(function(k) {
+      assertEqual(TAGS[k].family, 'Anchor');
+    });
+  });
+
+  it('promotes orphaned children to top level when parent is filtered out', function() {
+    // Filter out Def — its children (Mn, Ex, An) are still emitted because
+    // the parent-suppression check only fires when the parent is present.
+    var noDef = tagOrder(function(k) { return k !== 'Def'; });
+    ['Mn', 'Ex', 'An'].forEach(function(child) {
+      assert(noDef.indexOf(child) !== -1, child + ' should still appear when Def is filtered');
+    });
+    assertEqual(noDef.indexOf('Def'), -1);
+  });
+
+  it('returns all 19 tags when no filter is given', function() {
+    assertEqual(tagOrder().length, Object.keys(TAGS).length);
+  });
 });
 
 // ─── Render results ───────────────────────────────────────────────────────

@@ -191,6 +191,7 @@ function renderStructureBody() {
     $('#sub-cards').innerHTML = msg;
     $('#sub-sheet').innerHTML = msg;
     $('#sub-map').innerHTML   = msg;
+    $('#sub-gaps').innerHTML  = msg;
     return;
   }
   if (SUB_RENDERERS[currentSub]) SUB_RENDERERS[currentSub]();

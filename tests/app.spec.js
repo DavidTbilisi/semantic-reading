@@ -136,15 +136,20 @@ test('selecting text and pressing a tag key creates a tagged span', async ({ pag
   await expect(page.locator('.tlabel').first()).toBeVisible();
 });
 
-test('clicking a tagged span removes the tag (retract)', async ({ page }) => {
+test('clicking a tagged span opens the note popup; Remove button retracts the tag', async ({ page }) => {
   await pasteTextAndGoMark(page, SAMPLE_TEXT);
   await selectFirstParaAndShowTagbar(page);
   await page.locator('.tagbar-btn', { hasText: 'R' }).first().click();
   await expect(page.locator('.tspan').first()).toBeVisible();
 
-  // Click the tagged span to retract the mark (no text selected)
+  // Click the tagged span (no text selected) → note popup appears
   await page.locator('.tspan').first().click();
+  await expect(page.locator('#note-popup')).not.toHaveClass(/hidden/);
+
+  // The popup's Remove button retracts the tag
+  await page.locator('#note-popup-remove').click();
   await expect(page.locator('.tspan')).toHaveCount(0);
+  await expect(page.locator('#note-popup')).toHaveClass(/hidden/);
 });
 
 // ─── Mode switching ───────────────────────────────────────────────────────────
@@ -342,4 +347,302 @@ test('re-tagging a word changes its label without duplicating the span', async (
   const spans = await tspanSnapshot(page);
   expect(spans).toHaveLength(1);
   expect(spans[0]).toEqual({ text: 'mitochondria', tag: 'R' });
+});
+
+// ─── Note popup ──────────────────────────────────────────────────────────────
+
+test('note popup opens with tag chip + preview text when a tagged span is clicked', async ({ page }) => {
+  await pasteTextAndGoMark(page, SINGLE_PARA);
+  await selectWordAndTag(page, 'mitochondria', 'Def');
+  await page.locator('.tspan').first().click();
+
+  await expect(page.locator('#note-popup')).not.toHaveClass(/hidden/);
+  await expect(page.locator('#note-popup-tag')).toHaveText('Def');
+  await expect(page.locator('#note-popup-preview')).toHaveText('mitochondria');
+});
+
+test('typing a note adds .has-note class to the span', async ({ page }) => {
+  await pasteTextAndGoMark(page, SINGLE_PARA);
+  await selectWordAndTag(page, 'mitochondria', 'Def');
+  await page.locator('.tspan').first().click();
+
+  await page.locator('#note-popup-ta').fill('powerhouse organelle');
+  await page.locator('#note-popup-close').click();
+
+  await expect(page.locator('.tspan.has-note').first()).toBeVisible();
+});
+
+test('reopening the popup pre-fills the saved note', async ({ page }) => {
+  await pasteTextAndGoMark(page, SINGLE_PARA);
+  await selectWordAndTag(page, 'mitochondria', 'Def');
+  await page.locator('.tspan').first().click();
+  await page.locator('#note-popup-ta').fill('first note');
+  await page.locator('#note-popup-close').click();
+
+  await page.locator('.tspan').first().click();
+  await expect(page.locator('#note-popup-ta')).toHaveValue('first note');
+});
+
+test('popup Remove button retracts the tag and closes the popup', async ({ page }) => {
+  await pasteTextAndGoMark(page, SINGLE_PARA);
+  await selectWordAndTag(page, 'mitochondria', 'Def');
+  await page.locator('.tspan').first().click();
+  await page.locator('#note-popup-remove').click();
+
+  await expect(page.locator('.tspan')).toHaveCount(0);
+  await expect(page.locator('#note-popup')).toHaveClass(/hidden/);
+});
+
+// ─── Gaps sub-view ───────────────────────────────────────────────────────────
+
+test('Gaps sub-view shows empty state with no Q tags or notes', async ({ page }) => {
+  await pasteTextAndGoMark(page, SAMPLE_TEXT);
+  await page.click('[data-tab="structure"]');
+  await page.click('[data-sub="gaps"]');
+
+  await expect(page.locator('#sub-gaps .struct-empty')).toBeVisible();
+});
+
+test('Gaps sub-view lists Q-tagged spans under "Open questions"', async ({ page }) => {
+  await pasteTextAndGoMark(page, SINGLE_PARA);
+  await selectWordAndTag(page, 'metabolism', 'Q');
+  await page.click('[data-tab="structure"]');
+  await page.click('[data-sub="gaps"]');
+
+  await expect(page.locator('#sub-gaps')).toContainText('Open questions');
+  await expect(page.locator('#sub-gaps .gap-text').first()).toHaveText('metabolism');
+});
+
+test('Gaps sub-view lists noted spans under "Reader notes"', async ({ page }) => {
+  await pasteTextAndGoMark(page, SINGLE_PARA);
+  await selectWordAndTag(page, 'mitochondria', 'Def');
+  await page.locator('.tspan').first().click();
+  await page.locator('#note-popup-ta').fill('important context');
+  await page.locator('#note-popup-close').click();
+
+  await page.click('[data-tab="structure"]');
+  await page.click('[data-sub="gaps"]');
+
+  await expect(page.locator('#sub-gaps')).toContainText('Reader notes');
+  await expect(page.locator('#sub-gaps .gap-note').first()).toContainText('important context');
+});
+
+// ─── Keyboard tag shortcuts ──────────────────────────────────────────────────
+
+test('selecting text and pressing "d" applies the Def tag', async ({ page }) => {
+  await pasteTextAndGoMark(page, SINGLE_PARA);
+  await page.evaluate(() => {
+    const reader = document.getElementById('reader');
+    const tw     = document.createTreeWalker(reader, NodeFilter.SHOW_TEXT);
+    let node;
+    while ((node = tw.nextNode())) {
+      const idx = node.textContent.indexOf('mitochondria');
+      if (idx !== -1) {
+        const range = document.createRange();
+        range.setStart(node, idx);
+        range.setEnd(node, idx + 'mitochondria'.length);
+        window.getSelection().removeAllRanges();
+        window.getSelection().addRange(range);
+        return;
+      }
+    }
+  });
+  await page.locator('#reader').dispatchEvent('mouseup');
+  await page.waitForSelector('#tagbar:not(.hidden)');
+  await page.keyboard.press('d');
+
+  const spans = await tspanSnapshot(page);
+  expect(spans).toEqual([{ text: 'mitochondria', tag: 'Def' }]);
+});
+
+test('selecting text and pressing "s" applies the Assump tag (mode 4)', async ({ page }) => {
+  await page.click('[data-mode="4"]');
+  await pasteTextAndGoMark(page, SINGLE_PARA);
+  await page.evaluate(() => {
+    const reader = document.getElementById('reader');
+    const tw     = document.createTreeWalker(reader, NodeFilter.SHOW_TEXT);
+    let node;
+    while ((node = tw.nextNode())) {
+      const idx = node.textContent.indexOf('powerhouse');
+      if (idx !== -1) {
+        const range = document.createRange();
+        range.setStart(node, idx);
+        range.setEnd(node, idx + 'powerhouse'.length);
+        window.getSelection().removeAllRanges();
+        window.getSelection().addRange(range);
+        return;
+      }
+    }
+  });
+  await page.locator('#reader').dispatchEvent('mouseup');
+  await page.waitForSelector('#tagbar:not(.hidden)');
+  await page.keyboard.press('s');
+
+  const spans = await tspanSnapshot(page);
+  expect(spans).toEqual([{ text: 'powerhouse', tag: 'Assump' }]);
+});
+
+test('letter for a tag not in current mode is a no-op', async ({ page }) => {
+  // Mode 1 (Easy) does NOT include Assump; pressing 's' should not tag.
+  await page.click('[data-mode="1"]');
+  await pasteTextAndGoMark(page, SINGLE_PARA);
+  await page.evaluate(() => {
+    const reader = document.getElementById('reader');
+    const tw     = document.createTreeWalker(reader, NodeFilter.SHOW_TEXT);
+    let node;
+    while ((node = tw.nextNode())) {
+      const idx = node.textContent.indexOf('mitochondria');
+      if (idx !== -1) {
+        const range = document.createRange();
+        range.setStart(node, idx);
+        range.setEnd(node, idx + 'mitochondria'.length);
+        window.getSelection().removeAllRanges();
+        window.getSelection().addRange(range);
+        return;
+      }
+    }
+  });
+  await page.locator('#reader').dispatchEvent('mouseup');
+  await page.waitForSelector('#tagbar:not(.hidden)');
+  await page.keyboard.press('s');
+
+  // No spans created — selection remains and no tspan in DOM
+  await expect(page.locator('.tspan')).toHaveCount(0);
+});
+
+test('Escape clears the selection and hides the tagbar', async ({ page }) => {
+  await pasteTextAndGoMark(page, SINGLE_PARA);
+  await selectFirstParaAndShowTagbar(page);
+  await expect(page.locator('#tagbar')).not.toHaveClass(/hidden/);
+
+  await page.keyboard.press('Escape');
+  await expect(page.locator('#tagbar')).toHaveClass(/hidden/);
+});
+
+// ─── Atlas / Map sub-view ────────────────────────────────────────────────────
+
+test('Atlas shows empty hint when no Def tags exist', async ({ page }) => {
+  await pasteTextAndGoMark(page, SINGLE_PARA);
+  await selectWordAndTag(page, 'metabolism', 'Q'); // not Def
+  await page.click('[data-tab="structure"]');
+  await page.click('[data-sub="map"]');
+
+  await expect(page.locator('#sub-map .struct-empty')).toBeVisible();
+});
+
+test('Atlas renders one SVG node per unique Def', async ({ page }) => {
+  await pasteTextAndGoMark(page, SINGLE_PARA);
+  await selectWordAndTag(page, 'mitochondria', 'Def');
+  await selectWordAndTag(page, 'powerhouse',   'Def');
+  await page.click('[data-tab="structure"]');
+  await page.click('[data-sub="map"]');
+
+  await expect(page.locator('#sub-map svg .map-node')).toHaveCount(2);
+});
+
+test('Atlas renders an edge when two Defs co-occur in the same paragraph', async ({ page }) => {
+  await pasteTextAndGoMark(page, SINGLE_PARA);
+  await selectWordAndTag(page, 'mitochondria', 'Def');
+  await selectWordAndTag(page, 'powerhouse',   'Def');
+  await page.click('[data-tab="structure"]');
+  await page.click('[data-sub="map"]');
+
+  await expect(page.locator('#sub-map svg .map-edge')).toHaveCount(1);
+});
+
+test('Atlas side bins list non-Def structural tags', async ({ page }) => {
+  await pasteTextAndGoMark(page, SINGLE_PARA);
+  await selectWordAndTag(page, 'mitochondria', 'Def');
+  await selectWordAndTag(page, 'metabolism',   'Q');
+  await page.click('[data-tab="structure"]');
+  await page.click('[data-sub="map"]');
+
+  await expect(page.locator('#sub-map .map-bin.b-Q')).toBeVisible();
+  await expect(page.locator('#sub-map .map-bin.b-Q li')).toHaveText(/metabolism/);
+});
+
+// ─── Session list interactions ───────────────────────────────────────────────
+
+test('clicking a saved session in the folios list loads it', async ({ page }) => {
+  // Save a session first
+  await page.click('[data-tab="input"]');
+  await page.fill('#input-text', SINGLE_PARA);
+  await page.fill('#title', 'Reload me');
+  await page.keyboard.press('Control+s');
+  await expect(page.locator('#sessions')).toContainText('Reload me');
+
+  // Start fresh, then click the saved session
+  page.once('dialog', d => d.accept()); // confirm "Start a new session?"
+  await page.click('#btn-new');
+  await expect(page.locator('#title')).toHaveValue('');
+
+  await page.locator('#sessions .sess').filter({ hasText: 'Reload me' }).click();
+  await expect(page.locator('#title')).toHaveValue('Reload me');
+  await expect(page.locator('#pane-mark')).not.toHaveClass(/hidden/);
+});
+
+test('the X button on a saved session deletes it after confirm', async ({ page }) => {
+  await page.click('[data-tab="input"]');
+  await page.fill('#input-text', SAMPLE_TEXT);
+  await page.fill('#title', 'Delete me');
+  await page.keyboard.press('Control+s');
+  await expect(page.locator('#sessions')).toContainText('Delete me');
+
+  page.once('dialog', d => d.accept()); // confirm "Delete "Delete me"?"
+  await page.locator('#sessions .sess').filter({ hasText: 'Delete me' }).locator('.sess-x').click();
+
+  await expect(page.locator('#sessions')).not.toContainText('Delete me');
+});
+
+test('New button prompts when paragraphs exist and clears state on confirm', async ({ page }) => {
+  await pasteTextAndGoMark(page, SAMPLE_TEXT);
+  page.once('dialog', d => d.accept());
+  await page.click('#btn-new');
+  await expect(page.locator('#input-text')).toHaveValue('');
+  await expect(page.locator('#pane-input')).not.toHaveClass(/hidden/);
+});
+
+test('Demo button prompts when paragraphs exist and replaces them on confirm', async ({ page }) => {
+  await pasteTextAndGoMark(page, SAMPLE_TEXT);
+  page.once('dialog', d => d.accept());
+  await page.click('#btn-demo');
+  // Demo lands on structure tab
+  await expect(page.locator('#pane-structure')).not.toHaveClass(/hidden/);
+  await expect(page.locator('#title')).toHaveValue(/Industrialization/);
+});
+
+// ─── Anki CSV export ─────────────────────────────────────────────────────────
+
+test('Export tab Anki section renders one block per framework with non-zero cards', async ({ page }) => {
+  await page.click('#btn-demo'); // loads tagged demo
+  await page.click('[data-tab="export"]');
+
+  // Demo touches NEDF (Def), CAST (R, L, T, X, Assump), SPEAR (B, C, A), ORACLE (M)
+  // and Q is cross-cutting (routed everywhere there's content).
+  const blocks = page.locator('.anki-block');
+  await expect(blocks).not.toHaveCount(0);
+  await expect(page.locator('.anki-fw').filter({ hasText: 'NEDF' })).toBeVisible();
+  await expect(page.locator('.anki-fw').filter({ hasText: 'CAST' })).toBeVisible();
+});
+
+test('Anki block shows a Copy button per framework', async ({ page }) => {
+  await page.click('#btn-demo');
+  await page.click('[data-tab="export"]');
+
+  const copyBtns = page.locator('.anki-copy');
+  const n = await copyBtns.count();
+  expect(n).toBeGreaterThan(0);
+});
+
+// ─── Theme persistence ──────────────────────────────────────────────────────
+
+test('theme choice persists across reload via localStorage', async ({ page }) => {
+  const initial = await page.locator('html').getAttribute('data-theme');
+  const target  = initial === 'dark' ? 'light' : 'dark';
+
+  await page.click('#btn-theme');
+  await expect(page.locator('html')).toHaveAttribute('data-theme', target);
+
+  await page.reload();
+  await expect(page.locator('html')).toHaveAttribute('data-theme', target);
 });
