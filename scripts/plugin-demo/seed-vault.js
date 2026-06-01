@@ -11,7 +11,8 @@
 const fs   = require('fs');
 const path = require('path');
 
-const PLUGIN_REPO = path.resolve(__dirname, '..', '..', '..', 'obsidian-semantic-reading');
+const PLUGIN_REPO = process.env.PLUGIN_REPO
+  || path.resolve(__dirname, '..', '..', '..', 'obsidian-semantic-reading');
 const PLUGIN_ID   = 'semantic-reading';
 
 function rmIfExists(p) {
